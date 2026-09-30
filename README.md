@@ -147,10 +147,6 @@ El envío del código de verificación en dos pasos y el aviso de asignación so
 
 ## Cómo se construyó
 
-{{pendiente: confirmar cómo se construyó (herramientas, si se usó Claude Code y con qué método)}}
-
-Lo que se ve en el propio sistema:
-
 - **Evolución por versiones.** El flujo principal va por su **cuarta versión**.
 - **Todo gira alrededor de los datos.** Las entradas escriben en una única tabla. La aplicación de gestión añade estados, asignación, observaciones y recordatorios. Los informes salen del registro de actividad, y las métricas de Google Ads se guardan junto a los contactos para cruzarlos con la inversión.
 - **Reglas de datos en la base.** La normalización de nombres, teléfonos y parámetros de campaña está en triggers de PostgreSQL, no repetida en cada flujo.
@@ -158,7 +154,6 @@ Lo que se ve en el propio sistema:
 ## Estado actual
 
 - **En producción**, con los **9 flujos activos**.
-- Volumen de contactos, tiempo medio de primera respuesta y tasa de conversión: {{pendiente}}.
 
 ## Lo que he aprendido
 
