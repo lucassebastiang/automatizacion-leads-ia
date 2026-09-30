@@ -1,5 +1,12 @@
+<p align="center">
+  <img src="assets/banner.png" alt="Sistema de leads con IA" width="100%">
+</p>
+
 # Sistema de leads con IA · n8n, PostgreSQL, Claude y WhatsApp
 
+![en producción](https://img.shields.io/badge/estado-en%20producci%C3%B3n-2EA043?style=flat-square) ![caso de estudio](https://img.shields.io/badge/caso%20de%20estudio-7C6CF0?style=flat-square) ![n8n](https://img.shields.io/badge/n8n-EA4B71?style=flat-square&logo=n8n&logoColor=white) ![Claude](https://img.shields.io/badge/Claude-D97757?style=flat-square&logo=claude&logoColor=white) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white) ![WhatsApp](https://img.shields.io/badge/WhatsApp-25D366?style=flat-square&logo=whatsapp&logoColor=white) ![Typebot](https://img.shields.io/badge/Typebot-0042DA?style=flat-square)
+
+> [!NOTE]
 > **Caso de estudio.** Sistema de captación y seguimiento de contactos comerciales para una asesoría de A Coruña. Aquí están el problema, la arquitectura, las decisiones técnicas, el [modelo de datos](docs/modelo-datos.md), el [prompt de análisis](docs/prompt-analisis.md) y una [plantilla importable de n8n](snippets/flujo-principal.n8n.json) reescrita desde cero.
 
 ## El problema
