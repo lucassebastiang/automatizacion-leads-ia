@@ -1,0 +1,403 @@
+{
+  "name": "Leads · Flujo principal (plantilla)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "nuevo-contacto",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Nuevo contacto",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "id": "56750631-d976-4928-a5ef-725f3d1bbf8c"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO leads.contactos (nombre, email, telefono, horario_preferido, servicio, mensaje, fuente, gclid, utm_source, utm_medium, utm_campaign, utm_term, utm_content)\nVALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)\nRETURNING id, nombre, email, telefono, horario_preferido, servicio, mensaje;",
+        "options": {
+          "queryReplacement": "={{ [ $json.body.nombre || '', $json.body.email || '', $json.body.telefono || null, $json.body.horario || null, $json.body.servicio || null, $json.body.mensaje || null, $json.body.fuente || 'bot', $json.body.gclid || null, $json.body.utm_source || null, $json.body.utm_medium || null, $json.body.utm_campaign || null, $json.body.utm_term || null, $json.body.utm_content || null ] }}"
+        }
+      },
+      "name": "Guardar contacto",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        220,
+        300
+      ],
+      "id": "64ee4ee9-6e58-4402-80dc-1233e12a2a7a"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, id: $json.id } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "name": "Responder al momento",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        300
+      ],
+      "id": "3344d4f1-9909-4bf8-b4ca-5aedec81b68e"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Construye la petición a la API de Mensajes. Los servicios del despacho van en <SERVICIOS>.\nconst c = $('Guardar contacto').first().json;\nconst prompt = [\n  'Eres el asistente de una asesoría. Tu tarea es valorar un contacto comercial.',\n  'Responde ÚNICAMENTE con un objeto JSON válido, sin texto antes ni después.',\n  '',\n  'Formato: {\"viabilidad\":\"alta|media|baja\",\"tipo_caso\":\"string\",\"resumen_corto\":\"string\",\"prioridad\":1-5,\"p1\":\"string\",\"p2\":\"string\",\"p3\":\"string\"}',\n  '',\n  'Criterios: alta = encaja con nuestros servicios y hay datos suficientes; media = encaja pero falta información; baja = no encaja o no se puede valorar.',\n  'Prioridad: 5 = contactar hoy; 1 = sin urgencia.',\n  'p1: saludo con su nombre. p2: sobre su consulta, qué podemos hacer, sin prometer resultados. p3: le llamaremos en su horario preferido; despedida.',\n  '',\n  'Nuestros servicios: <SERVICIOS>.',\n  '',\n  'Datos del contacto:',\n  'Nombre: ' + (c.nombre || ''),\n  'Servicio: ' + (c.servicio || ''),\n  'Horario: ' + (c.horario_preferido || ''),\n  'Mensaje: ' + (c.mensaje || ''),\n].join('\\n');\n\nreturn [{ json: { cuerpo: {\n  model: 'claude-haiku-4-5',\n  max_tokens: 1024,\n  messages: [{ role: 'user', content: prompt }],\n} } }];"
+      },
+      "name": "Preparar prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ],
+      "id": "4d5a918b-8d19-4d7e-874f-474c3128adfc"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.example.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.cuerpo) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "name": "Analizar con Claude",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "id": "c1dc8552-a583-4a20-b258-ee60caf269e7"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parseo seguro de la respuesta de Claude (nodo Code de n8n, modo «Run Once for All Items»).\n//\n// La salida de un modelo es una ENTRADA NO FIABLE:\n//   - puede traer texto alrededor del JSON;\n//   - puede traer un JSON mal formado o con campos inesperados;\n//   - la llamada HTTP puede haber fallado (el nodo anterior continúa con un error).\n// En ningún caso se rompe el flujo: el contacto ya está guardado y se completa con valores seguros.\n\nconst VIABILIDADES = ['alta', 'media', 'baja'];\nconst POR_DEFECTO = {\n  viabilidad: 'pendiente',\n  tipo_caso: 'Sin clasificar',\n  resumen_corto: '',\n  prioridad: 3,\n  p1: '',\n  p2: '',\n  p3: '',\n};\n\n/** Extrae el primer objeto JSON equilibrado del texto (respetando cadenas y escapes). */\nfunction extraerJson(texto) {\n  const inicio = texto.indexOf('{');\n  if (inicio < 0) return null;\n  let profundidad = 0;\n  let enCadena = false;\n  let escape = false;\n  for (let i = inicio; i < texto.length; i++) {\n    const c = texto[i];\n    if (enCadena) {\n      if (escape) escape = false;\n      else if (c === '\\\\') escape = true;\n      else if (c === '\"') enCadena = false;\n      continue;\n    }\n    if (c === '\"') enCadena = true;\n    else if (c === '{') profundidad++;\n    else if (c === '}' && --profundidad === 0) return texto.slice(inicio, i + 1);\n  }\n  return null;\n}\n\nconst texto = (s, max) => (typeof s === 'string' ? s.trim().slice(0, max) : '');\n\nfunction validar(bruto) {\n  const a = { ...POR_DEFECTO };\n  if (!bruto || typeof bruto !== 'object') return a;\n  const v = String(bruto.viabilidad || '').toLowerCase().trim();\n  a.viabilidad = VIABILIDADES.includes(v) ? v : 'pendiente';\n  a.tipo_caso = texto(bruto.tipo_caso, 255) || POR_DEFECTO.tipo_caso;\n  a.resumen_corto = texto(bruto.resumen_corto, 1000);\n  const p = Number.parseInt(bruto.prioridad, 10);\n  a.prioridad = Number.isFinite(p) ? Math.min(5, Math.max(1, p)) : 3;\n  a.p1 = texto(bruto.p1, 1500);\n  a.p2 = texto(bruto.p2, 1500);\n  a.p3 = texto(bruto.p3, 1500);\n  return a;\n}\n\n/** El texto del modelo va a un correo HTML: se escapa siempre. */\nconst escaparHtml = (s) =>\n  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&#39;');\n\n// --- n8n ------------------------------------------------------------------------------------------\n\nconst respuesta = $input.first().json;\nconst contenido = Array.isArray(respuesta.content) ? respuesta.content : [];\nconst bloqueTexto = contenido.find((b) => b && b.type === 'text');\nlet analisis = { ...POR_DEFECTO };\n\nif (bloqueTexto && typeof bloqueTexto.text === 'string') {\n  const json = extraerJson(bloqueTexto.text);\n  if (json) {\n    try {\n      analisis = validar(JSON.parse(json));\n    } catch (e) {\n      analisis = { ...POR_DEFECTO };\n    }\n  }\n}\n\nconst contacto = $('Guardar contacto').first().json;\nconst parrafos = [analisis.p1, analisis.p2, analisis.p3].filter(Boolean);\n\nreturn [\n  {\n    json: {\n      id: contacto.id,\n      nombre: contacto.nombre,\n      email: contacto.email,\n      telefono: contacto.telefono,\n      servicio: contacto.servicio,\n      horario: contacto.horario_preferido,\n      mensaje: contacto.mensaje || 'Sin mensaje adicional',\n      viabilidad: analisis.viabilidad,\n      tipo_caso: analisis.tipo_caso,\n      resumen: analisis.resumen_corto,\n      prioridad: analisis.prioridad,\n      correo_texto: parrafos.join('\\n\\n'),\n      correo_html: parrafos.map((p) => '<p style=\"margin:0 0 16px;line-height:1.6\">' + escaparHtml(p) + '</p>').join(''),\n      analisis_ok: analisis.viabilidad !== 'pendiente',\n    },\n  },\n];\n"
+      },
+      "name": "Parsear respuesta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ],
+      "id": "26b2ad91-7153-4600-88f3-9be55a971654"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE leads.contactos\nSET viabilidad = $1, tipo_caso = $2, resumen = $3, prioridad = $4, correo_enviado = $5, actualizado = now()\nWHERE id = $6;",
+        "options": {
+          "queryReplacement": "={{ [ $json.viabilidad, $json.tipo_caso, $json.resumen, $json.prioridad, $json.correo_texto, $json.id ] }}"
+        }
+      },
+      "name": "Guardar análisis",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1320,
+        300
+      ],
+      "id": "d06eeb7b-c117-451f-9332-0eac6e1c1e7b"
+    },
+    {
+      "parameters": {
+        "fromEmail": "Asesoría <contacto@example.com>",
+        "toEmail": "={{ $('Parsear respuesta').first().json.email }}",
+        "subject": "=Tu consulta sobre {{ $('Parsear respuesta').first().json.servicio }}",
+        "emailFormat": "html",
+        "html": "=<div style=\"font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px\">\n<h2 style=\"margin:0 0 20px\">Hola {{ $('Parsear respuesta').first().json.nombre }},</h2>\n{{ $('Parsear respuesta').first().json.correo_html }}\n<hr style=\"border:none;border-top:1px solid #e2e8f0;margin:24px 0\">\n<p style=\"font-size:13px;color:#718096\">Asesoría · <a href=\"https://www.example.com\">www.example.com</a></p>\n</div>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "name": "Correo al contacto",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1540,
+        200
+      ],
+      "onError": "continueRegularOutput",
+      "id": "40c6e34c-ee10-4681-ab2c-d16abec6ea7d"
+    },
+    {
+      "parameters": {
+        "fromEmail": "Leads <leads@example.com>",
+        "toEmail": "equipo@example.com",
+        "subject": "=[{{ $('Parsear respuesta').first().json.viabilidad }}] Contacto #{{ $('Parsear respuesta').first().json.id }} · {{ $('Parsear respuesta').first().json.servicio }}",
+        "emailFormat": "text",
+        "text": "=Nuevo contacto #{{ $('Parsear respuesta').first().json.id }}\n\nViabilidad: {{ $('Parsear respuesta').first().json.viabilidad }} | Prioridad: {{ $('Parsear respuesta').first().json.prioridad }}/5 | Tipo: {{ $('Parsear respuesta').first().json.tipo_caso }}\n\nNombre: {{ $('Parsear respuesta').first().json.nombre }}\nEmail: {{ $('Parsear respuesta').first().json.email }}\nTeléfono: {{ $('Parsear respuesta').first().json.telefono }}\nHorario: {{ $('Parsear respuesta').first().json.horario }}\nServicio: {{ $('Parsear respuesta').first().json.servicio }}\n\nResumen IA:\n{{ $('Parsear respuesta').first().json.resumen }}\n\nMensaje:\n{{ $('Parsear respuesta').first().json.mensaje }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "name": "Ficha al equipo",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1760,
+        200
+      ],
+      "onError": "continueRegularOutput",
+      "id": "63c9ce7c-c972-4276-992d-b9b46faa1024"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b75cd5b0-8211-41cd-9aab-107e16719477",
+              "leftValue": "={{ $('Parsear respuesta').first().json.viabilidad }}",
+              "rightValue": "alta",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "ecb33f8d-e0b5-4110-a930-5752e66abed7",
+              "leftValue": "={{ $('Parsear respuesta').first().json.viabilidad }}",
+              "rightValue": "media",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "name": "¿Viabilidad alta o media?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        200
+      ],
+      "id": "a424a286-fb03-48de-a84d-f0227aaa9f2d"
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "minutes"
+      },
+      "name": "Esperar 2 minutos",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2200,
+        100
+      ],
+      "id": "2bdb4a35-8ee2-4165-8f48-00452caad8e6"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://whatsapp.example.com/v21.0/PHONE_NUMBER_ID/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', to: String($('Parsear respuesta').first().json.telefono || '').replace(/[^0-9]/g, ''), type: 'template', template: { name: 'confirmacion_contacto', language: { code: 'es_ES' }, components: [{ type: 'body', parameters: [{ type: 'text', text: $('Parsear respuesta').first().json.nombre }] }] } }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "name": "WhatsApp (plantilla aprobada)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        100
+      ],
+      "onError": "continueRegularOutput",
+      "id": "f34b4813-ab21-471d-982c-14067fefeef0"
+    },
+    {
+      "parameters": {
+        "content": "## Plantilla genérica\nCaso de estudio: sistema de leads con IA.\n\nAntes de usarla:\n1. Crea las credenciales (PostgreSQL, SMTP y dos «Header Auth»: `x-api-key` para Claude y `Authorization: Bearer …` para WhatsApp) y asígnalas a sus nodos.\n2. Cambia las URLs de ejemplo por las de la API de Mensajes de Anthropic y la API de WhatsApp Business (con tu PHONE_NUMBER_ID).\n3. Crea y aprueba la plantilla `confirmacion_contacto` en WhatsApp Business.\n4. Sustituye `<SERVICIOS>` en «Preparar prompt».\n5. Crea las tablas con `esquema.sql`.",
+        "height": 360,
+        "width": 420
+      },
+      "name": "Léeme",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -60
+      ],
+      "id": "6632689d-158a-4830-99d0-e716352ed98b"
+    }
+  ],
+  "connections": {
+    "Nuevo contacto": {
+      "main": [
+        [
+          {
+            "node": "Guardar contacto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar contacto": {
+      "main": [
+        [
+          {
+            "node": "Responder al momento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Responder al momento": {
+      "main": [
+        [
+          {
+            "node": "Preparar prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar prompt": {
+      "main": [
+        [
+          {
+            "node": "Analizar con Claude",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analizar con Claude": {
+      "main": [
+        [
+          {
+            "node": "Parsear respuesta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsear respuesta": {
+      "main": [
+        [
+          {
+            "node": "Guardar análisis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardar análisis": {
+      "main": [
+        [
+          {
+            "node": "Correo al contacto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Correo al contacto": {
+      "main": [
+        [
+          {
+            "node": "Ficha al equipo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ficha al equipo": {
+      "main": [
+        [
+          {
+            "node": "¿Viabilidad alta o media?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Viabilidad alta o media?": {
+      "main": [
+        [
+          {
+            "node": "Esperar 2 minutos",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Esperar 2 minutos": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp (plantilla aprobada)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}
